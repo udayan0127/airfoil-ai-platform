@@ -82,7 +82,8 @@ Be specific and use only the numbers provided above. No speculation."""
                 }
             ],
             "max_tokens": 800,  # High enough to avoid thinking mode eating all tokens
-            "temperature": 0.3
+            "temperature": 0.3,
+            "reasoning_effort": None
 
         }
         
