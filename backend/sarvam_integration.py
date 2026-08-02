@@ -12,7 +12,7 @@ load_dotenv()
 
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
 SARVAM_ENDPOINT = "https://api.sarvam.ai/v1/chat/completions"
-SARVAM_MODEL = "sarvam-30b"
+SARVAM_MODEL = "sarvam-105b"
 
 
 def generate_airfoil_explanation(airfoil_name: str, airfoil_data: dict, 
