@@ -82,8 +82,8 @@ Be specific and use only the numbers provided above. No speculation."""
                 }
             ],
             "max_tokens": 400,  # High enough to avoid thinking mode eating all tokens
-            "temperature": 0.3,  # Lower temperature = more focused, less random
-            "reasoning_effort": None  # Disable thinking mode for speed
+            "temperature": 0.3
+
         }
         
         response = requests.post(SARVAM_ENDPOINT, json=payload, headers=headers, timeout=10)
