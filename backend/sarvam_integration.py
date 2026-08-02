@@ -99,6 +99,13 @@ Be specific and use only the numbers provided above. No speculation."""
         return f"{airfoil_name} is recommended. (API timeout - explanation unavailable)"
     except requests.exceptions.ConnectionError:
         return f"{airfoil_name} is recommended. (Connection error - explanation unavailable)"
+    except requests.exceptions.HTTPError as e:
+        try:
+            body = e.response.text[:300]
+        except Exception:
+            body = str(e)
+        print(f"SARVAM API ERROR (status {e.response.status_code}): {body}")
+        return f"{airfoil_name} is recommended for your {flight_regime} flight regime. (API error: {body[:100]})"
     except Exception as e:
         # Graceful fallback if Sarvam is down
         return f"{airfoil_name} is recommended for your {flight_regime} flight regime. (Details unavailable: {str(e)[:30]})"
