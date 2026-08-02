@@ -81,7 +81,7 @@ Be specific and use only the numbers provided above. No speculation."""
                     "content": prompt
                 }
             ],
-            "max_tokens": 400,  # High enough to avoid thinking mode eating all tokens
+            "max_tokens": 800,  # High enough to avoid thinking mode eating all tokens
             "temperature": 0.3
 
         }
@@ -91,7 +91,11 @@ Be specific and use only the numbers provided above. No speculation."""
         
         # Extract the text from the response
         result = response.json()
-        explanation = result["choices"][0]["message"]["content"].strip()
+        message = result["choices"][0]["message"]
+        explanation = message.get("content") or message.get("reasoning_content") or ""
+        explanation = explanation.strip()
+        if not explanation:
+            return f"{airfoil_name} is recommended for your {flight_regime} flight regime. (Model returned empty response)"
         
         return explanation
     
