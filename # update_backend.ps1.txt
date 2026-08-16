@@ -1,0 +1,276 @@
+# update_backend.ps1
+# Updates polar_data.py and main.py with new aerodynamic analysis functions
+
+$backend_path = "C:\Users\udaya\airfoil-ai-platform\backend"
+
+# polar_data.py content
+$polar_data_content = @'
+"""
+Generates drag polar data (Cl vs Cd curves) for each airfoil.
+Real XFOIL data would be ideal, but for our MVP we generate physically
+plausible curves using a quadratic drag polar approximation:
+    Cd = Cd_min + K * (Cl - Cl_ldmax)^2
+where Cl_ldmax is the Cl at best L/D ratio, and K is a curvature factor.
+"""
+import math
+
+
+def cl_to_alpha(cl, alpha_zero_lift=-2.0, slope=6.0):
+    """
+    Simple empirical conversion: CL to angle of attack (degrees).
+    For most cambered airfoils near cruise, alpha ≈ CL * 5-7 degrees,
+    with zero-lift AoA around -2 degrees. This is an approximation,
+    not a substitute for real XFOIL/wind tunnel polar data.
+    """
+    return round(alpha_zero_lift + cl * slope, 2)
+
+
+def generate_polar(airfoil: dict, num_points: int = 40) -> dict:
+    """
+    Given an airfoil dict with cl_max, cd_min, best_cl_cd,
+    generate a drag polar curve (Cl vs Cd vs Alpha vs L/D).
+    """
+    cl_max = airfoil["cl_max"]
+    cd_min = airfoil["cd_min"]
+    ld_max = airfoil["best_cl_cd"]
+
+    # Cl at which drag is minimum (near L/D max point)
+    cl_ldmax = cd_min * ld_max  # from L/D = Cl/Cd => Cl = LD * Cd
+
+    # Curvature factor - controls how fast drag rises off min
+    # Fit so that at cl_max, Cd is roughly 2x cd_min (realistic for many airfoils)
+    delta = cl_max - cl_ldmax
+    if delta <= 0:
+        K = 0.01  # fallback
+    else:
+        K = (cd_min * 1.5) / (delta * delta)
+
+    # Generate points across Cl range
+    cl_min = -0.4  # negative lift (inverted flight)
+    curve = []
+    for i in range(num_points):
+        cl = cl_min + (cl_max - cl_min) * (i / (num_points - 1))
+
+        # Quadratic polar: Cd rises as Cl departs from cl_ldmax
+        cd = cd_min + K * (cl - cl_ldmax) ** 2
+
+        # Add stall behavior - Cd rises sharply near cl_max
+        if cl > cl_max * 0.9:
+            stall_factor = ((cl - cl_max * 0.9) / (cl_max * 0.1)) ** 2
+            cd += stall_factor * cd_min * 3
+
+        # L/D at this point
+        ld = cl / cd if cd > 0 else 0
+
+        curve.append({
+            "cl": round(cl, 4),
+            "cd": round(cd, 6),
+            "ld": round(ld, 2),
+            "alpha": cl_to_alpha(cl)
+        })
+
+    return {
+        "name": airfoil["name"],
+        "curve": curve,
+        "cl_ldmax": round(cl_ldmax, 3),
+        "operating_point": {
+            "cl": cl_ldmax,
+            "cd": cd_min
+        }
+    }
+
+
+def generate_ld_vs_airspeed(airfoil: dict, weight_g: float, wing_area_m2: float,
+                              v_min: float = 5.0, v_max: float = 30.0,
+                              num_points: int = 50) -> dict:
+    """
+    Generate L/D ratio vs airspeed curve for level flight.
+    For level flight: Cl_required = 2*W / (rho * V^2 * S)
+    Cd is then computed from the same quadratic polar model used in generate_polar().
+    """
+    rho = 1.225  # kg/m^3, sea level
+    weight_n = weight_g * 9.81 / 1000
+
+    cl_max = airfoil["cl_max"]
+    cd_min = airfoil["cd_min"]
+    ld_max = airfoil["best_cl_cd"]
+    cl_ldmax = cd_min * ld_max
+
+    delta = cl_max - cl_ldmax
+    K = (cd_min * 1.5) / (delta * delta) if delta > 0 else 0.01
+
+    curve = []
+    stall_speed_ms = None
+
+    for i in range(num_points):
+        v = v_min + (v_max - v_min) * (i / (num_points - 1))
+
+        cl_required = (2 * weight_n) / (rho * v**2 * wing_area_m2)
+
+        # Flag/clamp points beyond stall - level flight isn't achievable here
+        stalled = cl_required > cl_max
+        if stalled and stall_speed_ms is None:
+            stall_speed_ms = round(v, 2)
+        cl_used = min(cl_required, cl_max)
+
+        cd = cd_min + K * (cl_used - cl_ldmax) ** 2
+        ld = cl_used / cd if cd > 0 else 0
+
+        curve.append({
+            "v_ms": round(v, 2),
+            "v_kmh": round(v * 3.6, 2),
+            "cl": round(cl_used, 4),
+            "cd": round(cd, 6),
+            "ld": round(ld, 2),
+            "stalled": stalled
+        })
+
+    valid_ld = [p["ld"] for p in curve if not p["stalled"]]
+
+    return {
+        "name": airfoil["name"],
+        "curve": curve,
+        "max_ld": max(valid_ld) if valid_ld else 0,
+        "stall_speed_ms": stall_speed_ms
+    }
+
+
+if __name__ == "__main__":
+    # Test
+    test_airfoil = {
+        "name": "NACA 2412",
+        "cl_max": 1.4,
+        "cd_min": 0.0075,
+        "best_cl_cd": 65
+    }
+    polar = generate_polar(test_airfoil)
+    print(f"Generated {len(polar['curve'])} points")
+    print(f"First 3: {polar['curve'][:3]}")
+    print(f"Last 3: {polar['curve'][-3:]}")
+    print(f"Cl at L/D max: {polar['cl_ldmax']}")
+
+    ld_curve = generate_ld_vs_airspeed(test_airfoil, weight_g=990, wing_area_m2=0.197)
+    print(f"\nL/D vs airspeed: {len(ld_curve['curve'])} points")
+    print(f"Max L/D: {ld_curve['max_ld']}, Stall speed: {ld_curve['stall_speed_ms']} m/s")
+'@
+
+# main.py content
+$main_py_content = @'
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from aerodynamics import analyze_drone
+from matcher import recommend_airfoils
+from sarvam_integration import generate_airfoil_explanation
+from polar_data import generate_polar, generate_ld_vs_airspeed
+from reynolds_sweep import generate_reynolds_sweep
+
+app = FastAPI()
+
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "https://airfoil-ai-platform.vercel.app",
+    ],
+    allow_origin_regex=r"https://airfoil-ai-platform.*\.vercel\.app",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/")
+def read_root():
+    return {"status": "Airfoil AI Platform running - Sarvam AI integration active"}
+
+
+@app.post("/recommend-airfoil")
+async def recommend_airfoil(weight: float, max_speed: float, payload: float,
+                            wingspan: float = 1.01, aspect_ratio: float = 5.18):
+    """
+    Takes aircraft specs + wing geometry, runs physics analysis, matches airfoils,
+    and generates AI explanations using Sarvam.
+    """
+    # Step 1: Physics analysis using wingspan + AR (with validation)
+    try:
+        physics = analyze_drone(
+            weight_g=weight,
+            max_speed_kmh=max_speed,
+            payload_g=payload,
+            wingspan_m=wingspan,
+            aspect_ratio=aspect_ratio
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Step 2: Match against airfoil database
+    top_airfoils = recommend_airfoils(
+        reynolds=physics["reynolds_number"],
+        required_cl=physics["required_cl"],
+        flight_regime=physics["flight_regime"],
+        top_n=3
+    )
+
+    # Guard: no matches found for these specs
+    if not top_airfoils:
+        raise HTTPException(
+            status_code=404,
+            detail="No suitable airfoils found for these specifications. Try adjusting weight, speed, or wing geometry."
+        )
+
+    # Wing area from wingspan + aspect ratio: AR = b^2 / S  =>  S = b^2 / AR
+    wing_area_m2 = (wingspan ** 2) / aspect_ratio
+
+    # Step 3: Generate Sarvam explanations + polar + Reynolds sweep + L/D vs airspeed for each airfoil
+    airfoils_with_explanations = []
+    for af in top_airfoils:
+        explanation = generate_airfoil_explanation(af["name"], af, physics)
+        airfoils_with_explanations.append({
+            "name": af["name"],
+            "description": af["description"],
+            "match_score": af["match_score"],
+            "cl_max": af["cl_max"],
+            "cd_min": af["cd_min"],
+            "best_cl_cd": af["best_cl_cd"],
+            "use_case": af["use_case"],
+            "ai_explanation": explanation,
+            "polar": generate_polar(af),
+            "reynolds_sweep": generate_reynolds_sweep(af),
+            "ld_vs_airspeed": generate_ld_vs_airspeed(af, weight, wing_area_m2)
+        })
+
+    # Step 4: Format response
+    return {
+        "input": {
+            "weight_g": weight,
+            "max_speed_kmh": max_speed,
+            "payload_g": payload,
+            "wingspan_m": wingspan,
+            "aspect_ratio": aspect_ratio
+        },
+        "physics": physics,
+        "airfoils": airfoils_with_explanations,
+        "recommendation": f"Based on your specs, we recommend {top_airfoils[0]['name']} for your build. See the AI explanation below."
+    }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+'@
+
+# Write files
+Write-Host "Updating backend files..."
+Set-Content -Path "$backend_path\polar_data.py" -Value $polar_data_content -Encoding UTF8
+Write-Host "✓ Updated polar_data.py"
+
+Set-Content -Path "$backend_path\main.py" -Value $main_py_content -Encoding UTF8
+Write-Host "✓ Updated main.py"
+
+Write-Host "`nDone! Backend files have been updated."
+Write-Host "Now run:"
+Write-Host "  cd $backend_path"
+Write-Host "  git add polar_data.py main.py"
+Write-Host "  git commit -m 'Add CL vs Alpha and L/D vs Airspeed calculations'"
+Write-Host "  git push"
