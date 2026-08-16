@@ -1,4 +1,4 @@
-"""
+﻿"""
 Generates drag polar data (Cl vs Cd curves) for each airfoil.
 Real XFOIL data would be ideal, but for our MVP we generate physically
 plausible curves using a quadratic drag polar approximation:
